@@ -1,0 +1,603 @@
+---
+title: "CS02 - Predicting Annual Air Pollution"
+author: "Nick Liu, Sehee Kim, Jorge Ramos, Jiayi Xue, Roxana Chen"
+output: 
+  html_document:
+    theme: cerulean
+    highlight: tango
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+## Introduction
+
+```{r setup, include=FALSE}
+# control global Rmd chunk settings
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+## Background
+
+With health impacts such as asthma, lung function, low birthweight, and viral infection being globally widespread, air pollution is at fifth place for global risk factors by total number of deaths from all causes in 2017 [^1]. With particles as small as 0.43 micrometers reaching into the human respiratory system, it is extremely difficult to catch visible effects until it is too late. This awareness has been inconsistent throughout the world, with some countries exceeding the World Health Organization (WHO) guideline for healthy air while other countries such as Africa and Asia displaying extremely poor air quality [^2]. Despite the fact that air quality has improved throughout time in the United States, it is still a major health risk. With air pollution monitors being sparsely spread throughout the contiguous United States, this may lead to inaccurate readings in significant regions often minimizing our knowledge on the relationship between air pollution and its health impacts. To reduce this gap, data from these monitors along with multiple external factors that manipulate air pollution concentration (urbanization, population density, road length, emissions, etc.,) is taken into account to make further analysis. Taking all these factors into consideration, **with what accuracy can we predict US annual average air pollution concentration?** Depending on this accuracy, we can take efficient and practical measures to avoid prominent health issues while raising awareness. 
+
+Extending, **can we find a more parsimonious model that we can utilize for various situations such as not having all the variables?** Occam’s Razor states that with a model of multiple predictors, it is best to minimize the amount of predictors in order to improve efficiency while maintaining accuracy: a parsimonious model. With this principle and using feature selection, our team found another model that was more practical and efficient to use when predicting air pollution concentration. Specifically, we can still find the concentration for different areas even when we do not and cannot measure all the predictors.
+
+We were given 876 monitors in the US with 48 various observations, explained by the table below. Note that although we are solely measuring fine particulate matter (PM_2.5), there are three other major types of air pollutants - gaseous, dust, and biological - and three other sizes of particulate pollution - coarse and large coarse. These are all types of pollution that significantly impact our health and should frequently be kept in mind.
+
+[^1]: https://www.stateofglobalair.org/sites/default/files/soga_2019_report.pdf
+[^2]: https://www.stateofglobalair.org/sites/default/files/soga_2019_fact_sheet.pdf
+
+**This is our data variables and their description**
+```{r table-creation, echo=FALSE}
+library(knitr)
+
+variables <- c("id", 
+               "fips", 
+               "lat", 
+               "lon", 
+               "state",
+               "county", 
+               "city", 
+               "CMAQ", 
+               "zcta", 
+               "zcta_area",
+               "zcta_pop",
+               "country_area",
+               "country_pop",
+               "imp_a(radius around the monitor)",
+               "Log_dist_to_prisec",
+               "log_pri_length_(radius around the monitor",
+               "log_prisec_length_(radius around the monitor)",
+               "log_nei_2008_pm25_sum_(radius of distance around the monitor)",
+               "popdens_zcta",
+               "nohs",
+               "somehs",
+               "hs",
+               "somecollege",
+               "associate",
+               "bachelor",
+               "grad",
+               "pov",
+               "hs_orless",
+               "urc2006 & urc2013",
+               "aod")
+descriptions <- c("monitor number (country number before the decimal, monitor number after the decimal)", 
+                  " federal information processing standard number for the country where the monitor is located", 
+                  "latitude of the monitor in degrees", 
+                  "longitude of the monitor in degrees",
+                  "state where the monitor is located",
+                  "county where the monitor is located",
+                  "city where the monitor is located",
+                  "estimated values of air pollution from Community Multiscale Air Quality, a monitoring system that uses chemistry and weather data to predict the air pollution",
+                  "Zip Code Tabulation Area where the monitor is located (2010)",
+                  "land area of the zip code area in meters squared (2010)",
+                  "population in the zip code area (2010)",
+                  "land area of the county of the monitor in meters squared",
+                  "population of the county of the monitor",
+                  "impervious surface measure such as roads, concrete, parking lots, and buildings as a measure of development",
+                  "log (natural log) distance to a primary or secondary road from the monitor",
+                  "count of primary road length in meters in a circle in various radius",
+                  "count of primary and secondary road length in meters in a circle in various radius",
+                  "tons of emissions from major sources database (annual data) sum of all sources within a circle in various radius meters of distance around the monitor",
+                  "population density (number of people per kilometer squared area of zcta)",
+                  "percentage of people in zcta area where the monitor is that do not have a high school degree",
+                  "percentage of people in zcta area where the monitor whose highest formal educational attainment was some high school education",
+                  "percentage of people in zcta area where the monitor whose highest formal educational attainment was completing a high school degree",
+                  "percentage of people in zcta area where the monitor whose highest formal educational attainment was completing some college education",
+                  "percentage of people in zcta area where the monitor whose highest formal educational attainment was completing an associate degree",
+                  "percentage of people in zcta area where the monitor whose highest formal educational attainment was a bachelor’s degree",
+                  "percentage of people in zcta area where the monitor whose highest formal educational attainment was a graduate degree",
+                  "percentage of people in zcta area where the monitor is that lived in poverty in 2008",
+                  "percentage of people in zcta area where the monitor whose highest formal educational attainment was a high school degree or less (sum of nohs, somehs, and hs)",
+                  "urban-rural classification of the county where the monitor is located (1 - totally urban and 6 - completely rural)",
+                  "Aerosol Optical Depth measurement from NASA satellite used as a proxy of particulate pollution")
+
+# Create the table
+variable_table <- data.frame(Variable = variables, Description = descriptions)
+
+kable(variable_table, align = "l")
+```
+
+### Load packages
+
+```{r load-packages, message=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(sf)
+library(maps)
+library(rnaturalearth)
+library(patchwork)
+```
+
+
+## The Data
+
+
+### Data Import
+
+```{r}
+pm <- read_csv("data/pm25_data.csv")
+```
+
+### Data Wrangling
+
+In our data wrangling, we performed factoring, data splitting, and cross validation. We factored `id`, `fips`, `zcta` to ensure they are treated as categorical values in the model. We also simplified the city feature to be binary, distinguishing monitors in cities and out of cities.
+
+```{r}
+# Converting to factors
+pm <- pm |>
+  mutate(across(c(id, fips, zcta), as.factor)) 
+
+# Making it clear which monitor is in a city or not in a city
+pm <- pm |>
+  mutate(city = case_when(city == "Not in a city" ~ "Not in a city",
+                          city != "Not in a city" ~ "In a city"))
+```
+
+Data splitting is critical in model prediction, we split data into training and testing categories. We use the training set to train the model by finding patterns in the data and we use the testing set to evaluate the model performance. The goal of data splitting is to test the model on data it has never seen during training to check for overfitting and assess its performance. We initiate the total dataset (876), split ⅔ of it into the training set (584) and ⅓ of it into the testing set (292). To enhance our model’s generalizability, we implemented 4-fold cross-validation using the vfold_cv function from the rsample package. The 4-fold cross-validation involves partitioning the training data set into 4 equal folds. The model is trained on three folds and validated on the fourth, cycling through all folds as the validation set. This ensures that the model is evaluated on multiple subsets of the training data and provides a more robust and reliable model. Cross-validation also helps mitigate the risk of overfitting and increases its generalizability.
+
+```{r}
+# setting a seed
+set.seed(1234)
+
+# Splitting data into train/testing split
+
+pm_split <- rsample::initial_split(data = pm, prop = 2/3)
+pm_split
+
+train_pm <- rsample::training(pm_split)
+test_pm <- rsample::testing(pm_split)
+ 
+# Performing cross validation
+vfold_pm <- rsample::vfold_cv(data = train_pm, v = 4)
+vfold_pm
+```
+
+## Analysis
+
+### Exploratory Data Analysis (EDA)
+
+```{r EDA-world}
+# loading the world map
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# plotting the monitor locations onto a world map
+ggplot(data = world) +
+    geom_sf() +
+    coord_sf(xlim = c(-125, -66), ylim = c(24.5, 50), 
+             expand = FALSE)+
+    geom_point(data = pm, aes(x = lon, y = lat), size = 2, 
+               shape = 23, fill = "darkred") + 
+    labs(title = "Different Concentrations of Monitors Across the US", x = "Latitude", y = "Longitude")
+```
+
+Exploring the data, we first mapped out all of the monitors onto a map of the US. From this map visualization, we are able to see how the amount of monitors is not a consistent spread across the US, but rather many monitors tend to be bunched up in specific areas while very sparse in others. Specifically, monitors tend to have large concentrations along the coast, possibly due to having a higher population along coastlines. 
+
+```{r}
+# counting the monitors in each state, listed from highest to lowest
+count(pm, state) |>
+  arrange(desc(n))
+```
+
+Looking further, specifically at the amount of monitors in each state, we can see the concentration of monitors is not only different across the country, but also different across states. For example, California has the highest amount of monitors at 85, which is almost double the amount of monitors than there is for the state with the second highest amount of monitors, being Ohio with 44. With this, we can see the inconsistency across states, and know that the varied spread of monitors across the US as seen in the previous world map plot is not necessarily dictated by state boundaries.
+
+```{r EDA-corr}
+# creating a correlation plot for all the variables
+pm_cor <- cor(pm |> dplyr::select_if(is.numeric))
+corrplot::corrplot(pm_cor, tl.cex = 0.5)
+```
+
+The correlation plot above shows both strength and direction of correlation between all of the variables in the dataset. For example, a deep blue color at the intersection of two variables indicates a strong, positive correlation, while a deep red color at the intersection of two variables shows a strong, negative correlation. 
+
+As the plot shows, each group of variables (i.e. log_pri_length_5000, log_pri_length_10000, etc. would be an example of variables in the same group) are highly positively correlated with each other, which is to be expected because the variables are measuring the same parameter, just on different scopes (ex. log_pri_length_5000 and log_pri_length_10000 are both measuring primary road length, but for different radii). A few more notable observations from the plot are that: 
+- CMAQ, a predictive measure of air pollution, is the most highly (and positively) correlated variable with value, the variable which reflects the actual measure of air pollution
+- CMAQ is more highly correlated with value than aod, another predictive air pollution variable
+- CMAQ is relatively strongly negatively correlated with urc measurements, which are a classification scale of the urban/rural level of an area.
+
+```{r EDA}
+# plotting the relationship between CMAQ & urc_2013
+ggplot(pm, aes(x = factor(urc2013), y = CMAQ, fill = urc2013)) + 
+  geom_boxplot() +
+  labs(x = "URC 2013")
+```
+
+Based on the previous correlation seen, we looked further into the relationship between CMAQ and the urc_2013 variables and found that the more rural an area is (on the urban-rural classification scale, 1 is more urban and 6 is more rural), the lower the predicted value of air pollution in the area (lower CMAQ value). The opposite is also true, as seen in the graph above; the more urban an area is, the higher the predicted value of air pollution (higer CMAQ value). 
+
+### Model
+
+After splitting the data into testing and training sets, we built the model using tidymodels. The steps start with creating “recipe” and assigning variable roles. Then, we specify the model, engine, and mode. Next, we fit workflow and get predictions. Finally, we use the predictions to find performance metrics. 
+
+```{r}
+# Recipe with all predictors
+RF_rec <- recipe(train_pm) |>
+    # assign roles for the columns
+    update_role(everything(), new_role = "predictor")|>
+    update_role(value, new_role = "outcome")|>
+    update_role(id, new_role = "id variable") |>
+    update_role("fips", new_role = "county id") |>
+    
+    # step_novel assigns a previously unseen factor level to a new value 
+    step_novel("state") |>
+
+    # converts string to factors
+    step_string2factor("state", "county", "city") |>
+  
+    # removing redundancy
+    step_rm("county") |>
+    step_rm("zcta") |>
+    # removing highly correlated variables
+    step_corr(all_numeric())|>
+    # removing near zero variance predictors
+    step_nzv(all_numeric())
+```
+
+The purpose of recipe() function is to provide a standardized structure to ensure that the data is in the correct format for modeling. The recipe, RF_rec, defines a pre-processing pipeline for the training dataset to prepare for the model. In the recipe, we initially assign all variables in the dataset as predictors. Then, we override the role for the column value as the “outcome”, which is our target predicting variable. `id` is specified as an "id variable," which means it won't be used as a predictor or outcome. The “fips” column was assigned the new role of "county id" which is used for grouping but not for predicting.
+
+```{r}
+```
+
+After creating the recipe(), several step_*() functions are added to define specific pre-processing steps. step_novel() is used for the “state” variable to get all cross-validation folds to work by ensuring that any unseen level in the “state” variables which wasn't observed during training will be assigned a placeholder value to prevent errors such as overfitting. We then convert the string columns “state”, “county”, and “city” to factors, making them suitable for categorical handling in modeling. Next, we removed columns “county” and “zcta” from the dataset as they are redundant, removed numeric variables that are highly correlated with each other, and removed numeric predictors with near-zero variance whose values barely change across observations, which contribute very little to the model prediction.
+
+```{r}
+# untuned model to find most important parameters
+RF_PM_model <- parsnip::rand_forest(mtry = 10, min_n = 3) |> 
+  set_engine("randomForest") |>
+  set_mode("regression")
+```
+
+A tuned random forest model was then initialized to improve predictive performance. Two hyperparameters, mtry and min_n, were included for tuning: mtry specifies the number of features randomly selected at each split in a tree, while min_n defines the minimum number of observations required in a node to allow further splitting. Rather than manually testing different values, the tune() function was used to automate the hyperparameter optimization process. The model engine was set to "randomForest," specifying the algorithm for building the random forest, and set_mode("regression") was used to indicate that the target variable is continuous (e.g. air pollution levels).
+
+```{r}
+# untuned workflow
+RF_wflow <- workflows::workflow() |>
+  workflows::add_recipe(RF_rec) |>
+  workflows::add_model(RF_PM_model)
+
+# fit with training set
+RF_wflow_fit <- parsnip::fit(RF_wflow, data = train_pm)
+
+# initializing a tuned random forest model
+tune_RF_model <- rand_forest(mtry = tune(), min_n = tune()) |>
+  set_engine("randomForest") |>
+  set_mode("regression")
+
+# create workflow
+RF_tune_wflow <- workflows::workflow() |>
+  workflows::add_recipe(RF_rec) |>
+  workflows::add_model(tune_RF_model)
+
+# find number of cores
+n_cores <- parallel::detectCores()
+
+# enable parallelism
+doParallel::registerDoParallel(cores = n_cores)
+```
+
+A workflow was created to combine pre-processing steps and modeling into a single object, simplifying the machine learning pipeline. The recipe (RF_rec) created earlier is now added to the workflow, ensuring that the data is pre-processed consistently before model training. Next, tune_RF_model is added to the workflow to enable training. 
+
+```{r}
+# perform hyper parameter tuning for random forest model using grid search across re samples
+set.seed(123)
+tune_RF_results <- tune_grid(object = RF_tune_wflow, resamples = vfold_pm, grid = 20)
+
+# results
+tune_RF_results |>
+  collect_metrics()
+```
+
+To improve efficiency, parallel computing is used to accelerate cross-validation and hyperparameter tuning during the model training process. The tune_grid() function evaluates multiple combinations of hyperparameters defined in tune_RF_model. After training, the collect_metrics() function extracts performance metrics, such as RMSE, R², and MAE, for each hyperparameter combination.
+
+```{r}
+# choose the best based off rmse
+tuned_RF_values <- select_best(tune_RF_results, metric = "rmse")
+tuned_RF_values
+
+# specify best combination from tune in workflow
+RF_tuned_wflow <-RF_tune_wflow |>
+  tune::finalize_workflow(tuned_RF_values)
+
+# fit model with those parameters on train AND test
+overallfit <- RF_wflow |>
+  tune::last_fit(pm_split)
+
+collect_metrics(overallfit)
+
+test_predictions <- collect_predictions(overallfit)
+```
+
+Finally, the select_best() function identifies the optimal combination of hyperparameters based on the RMSE metric. The finalized workflow, updated with the best hyperparameters, is then fitted on the entire training set and evaluated on the test set. Predicted values for the test set are retrieved from the final model to assess its performance and generalizability.
+
+### Extension
+
+As a reminder, our extension question is: **Can we find a more parsimonious model that we can utilize for various situations such as not having all the variables?** \
+\
+Our extension continues from our analysis. From our analysis, we had fitted an untuned random forest model to find the top 10 predictors based on the metric of importance which is measured by the tidymodel’s random forest model. The chart of the top 15 predictors by importance is shown below.
+
+```{r}
+# show the top 15 important features given by the built in function by tidymodels
+RF_wflow_fit |> 
+  extract_fit_parsnip() |> 
+  vip::vip(num_features = 15) +
+  labs(title = "Top 15 Feature Importance", x = "Importance") +
+  aes(fill = Importance) + 
+  scale_fill_gradient(low = "slateblue3", high = "slateblue1")
+```
+
+
+Now we can create the two random forest models similar to the main model that include only the top 10 and top 5 predictors. 
+
+```{r}
+# ensure parallelism
+n_cores <- parallel::detectCores() 
+doParallel::registerDoParallel(cores = n_cores)
+
+RF_t10_rec <- recipe(train_pm) |>
+    # assign roles for the columns
+    update_role(everything(), new_role = "predictor")|>
+    update_role(value, new_role = "outcome")|>
+    update_role(id, new_role = "id variable") |>
+    update_role("fips", new_role = "county id") |>
+  
+    # step_novel assigns a previously unseen factor level to a new value 
+    step_novel("state") |>
+  
+    # converts string to factors
+    step_string2factor("state", "county", "city") |>
+
+    # removing redundancy
+    step_rm("county") |>
+    step_rm("zcta") |>
+  
+    # removing highly correlated variables
+    step_corr(all_numeric()) |>
+    
+    # removing near zero variance predictors
+    step_nzv(all_numeric()) |>
+
+    # select only top 10 predictors
+    step_select(value, state, CMAQ, county_area, lat, log_nei_2008_pm10_sum_10000,
+                lon, aod, popdens_county, log_nei_2008_pm10_sum_15000,
+                log_nei_2008_pm10_sum_25000)
+    
+# creating top 10 workflow with model made in analysis
+RF_t10_wflow <- workflows::workflow() |>
+  workflows::add_recipe(RF_t10_rec) |>
+  workflows::add_model(RF_PM_model)
+
+# fit with the training data set
+RF_t10_wflow_fit <- parsnip::fit(RF_t10_wflow, data = train_pm)
+
+# fit with the cross validation 
+set.seed(456)
+resample_t10_RF_fit <- tune::fit_resamples(RF_t10_wflow, vfold_pm)
+collect_metrics(resample_t10_RF_fit)
+
+# initializing a tuned random forest model
+tune_RF_t10_model <- rand_forest(mtry = tune(), min_n = tune()) |>
+  set_engine("randomForest") |>
+  set_mode("regression")
+
+# create workflow
+RF_t10_tune_wflow <- workflows::workflow() |>
+  workflows::add_recipe(RF_t10_rec) |>
+  workflows::add_model(tune_RF_t10_model)
+
+# perform hyper parameter tuning for top 10 random forest model using grid search across re samples
+set.seed(123)
+tune_RF_t10_results <- tune_grid(object = RF_t10_tune_wflow, resamples = vfold_pm, grid = 20)
+
+# results
+tune_RF_t10_results |>
+  collect_metrics()
+
+# select best model based on rmse
+tuned_RF_t10_values<- select_best(tune_RF_t10_results, metric = "rmse")
+
+# specify best combination from tune in workflow
+RF_t10_tuned_wflow <-RF_t10_tune_wflow |>
+  tune::finalize_workflow(tuned_RF_t10_values)
+
+# fit model with those parameters on train AND test
+overallfit_t10 <- RF_t10_wflow |>
+  tune::last_fit(pm_split)
+
+test_t10_predictions <- collect_predictions(overallfit)
+
+# build a recipe with only top 5 features
+RF_t5_rec <- recipe(train_pm) |>
+    # assign roles for the columns
+    update_role(everything(), new_role = "predictor")|>
+    update_role(value, new_role = "outcome")|>
+    update_role(id, new_role = "id variable") |>
+    update_role("fips", new_role = "county id") |>
+    
+    # step_novel assigns a previously unseen factor level to a new value 
+    step_novel("state") |>
+    
+    # converts string to factors
+    step_string2factor("state", "county", "city") |>
+  
+    # removing redundancy
+    step_rm("county") |>
+    step_rm("zcta") |>
+    # removing highly correlated variables
+    step_corr(all_numeric())|>
+    # removing near zero variance predictors
+    step_nzv(all_numeric()) |>
+    
+    # select only top 5 predictors
+    step_select(value, state, CMAQ, county_area, lat, log_nei_2008_pm10_sum_10000)
+
+# creating top 5 workflow with model made in analysis
+RF_t5_wflow <- workflows::workflow() |>
+  workflows::add_recipe(RF_t5_rec) |>
+  workflows::add_model(RF_PM_model)
+
+# fit with the training data set
+RF_t5_wflow_fit <- parsnip::fit(RF_t5_wflow, data = train_pm)
+
+# fit with the cross validation 
+set.seed(456)
+resample_t5_RF_fit <- tune::fit_resamples(RF_t5_wflow, vfold_pm)
+collect_metrics(resample_t5_RF_fit)
+
+# initialize a tuned random forest model
+tune_RF_t5_model <- rand_forest(mtry = tune(), min_n = tune()) |>
+  set_engine("randomForest") |>
+  set_mode("regression")
+
+# create workflow
+RF_t5_tune_wflow <- workflows::workflow() |>
+  workflows::add_recipe(RF_t5_rec) |>
+  workflows::add_model(tune_RF_t5_model)
+
+# perform hyper parameter tuning for top 5 random forest model using grid search across re samples
+set.seed(123)
+tune_RF_t5_results <- tune_grid(object = RF_t5_tune_wflow, resamples = vfold_pm, grid = 20)
+
+# results
+tune_RF_t5_results |>
+  collect_metrics()
+
+# select best model based on rmse
+tuned_RF_t5_values<- select_best(tune_RF_t5_results, metric = "rmse")
+
+# specify best combination from tune in workflow
+RF_t5_tuned_wflow <-RF_t5_tune_wflow |>
+  tune::finalize_workflow(tuned_RF_t5_values)
+
+# fit model with those parameters on train AND test
+overallfit_t5 <- RF_t5_wflow |>
+  tune::last_fit(pm_split)
+
+test_t5_predictions <- collect_predictions(overallfit)
+```
+
+## Results & Discussion 
+
+For our results, we will be using the following metrics:
+
+* $adj. r^2$: The adjusted r-squared value, how much a model corresponds to the variance of the predicted values, adjusted to account for the amount of predictors. We use this value to compare the models on a scale of accuracy while also taking into consideration that less features are better. This is a good measure for how parsimonious a model is.
+* $rmse$: Root mean squared error, the average error between all predicted and truth values, a metric of distance.
+
+We ran our random forest models on the whole data set to get the following tables: 
+
+```{r, echo = FALSE}
+cat("overall model\n")
+collect_metrics(overallfit)
+cat("top10 model\n")
+collect_metrics(overallfit_t10)
+cat("top5 model\n")
+collect_metrics(overallfit_t5)
+```
+
+However, there isn't a built-in measurement for $adj. r^2$ in tidyverse so we would need to create a function to do it ourselves:
+
+```{r}
+# function for calculating adjusted r squared (chatgpt generated)
+calculate_adj_r_squared_tidy <- function(predictions, truth_col, estimate_col, num_predictors) {
+  
+  # Compute R-squared
+  rsq <- rsq_vec(truth_col, estimate_col)
+  
+  # Number of observations
+  n <- nrow(predictions)
+  
+  # Number of predictors
+  p <- num_predictors
+  
+  # Compute Adjusted R-squared
+  adj_r_squared <- 1 - ((1 - rsq) * (n - 1) / (n - p - 1))
+  
+  return(adj_r_squared)
+}
+
+
+# we must get the number of predictors for each model using a function (chatgpt generated)
+get_predictor_details <- function(workflow_fit) {
+  # Extract the final model fit from the workflow
+  final_model <- workflows::extract_fit_parsnip(workflow_fit)
+  
+  # Extract predictor importance
+  predictor_importance <- final_model$fit$importance
+  
+  # Get the names of the predictors
+  predictor_names <- rownames(predictor_importance)
+  
+  # Check the number of predictors
+  num_predictors <- length(predictor_names)
+  
+  # Return results as a list
+  list(
+    num_predictors = num_predictors,
+    predictor_names = predictor_names,
+    predictor_importance = predictor_importance
+  )
+}
+
+# Collect predictions from the fitted t10 model
+test_t10_predictions <- collect_predictions(overallfit_t10)
+# Get the number of predictors of the model using a function
+num_predictors_t10 <- get_predictor_details(overallfit_t10)$num_predictors
+# Use the function to calculate adj r^2
+adj_r_squared_t10 <- calculate_adj_r_squared_tidy(
+  predictions = test_t10_predictions,
+  truth_col = test_t10_predictions$value,
+  estimate_col = test_t10_predictions$.pred,
+  num_predictors = num_predictors_t10
+)
+
+# Collect predictions from the fitted t5 model
+test_t5_predictions <- collect_predictions(overallfit_t5)
+# Get the number of predictors of the model using a function
+num_predictors_t5 <- get_predictor_details(overallfit_t5)$num_predictors
+# Use the function to calculate adj r^2
+adj_r_squared_t5 <- calculate_adj_r_squared_tidy(
+  predictions = test_t5_predictions,
+  truth_col = test_t5_predictions$value,
+  estimate_col = test_t5_predictions$.pred,
+  num_predictors = num_predictors_t10
+)
+
+# Collect predictions from the fitted overall model
+test_overall_predictions <- collect_predictions(overallfit)
+# Get the number of predictors of the model using a function
+num_predictors_overall <- get_predictor_details(overallfit)$num_predictors
+# Use the function to calculate adj r^2
+adj_r_squared_overall <- calculate_adj_r_squared_tidy(
+  predictions = test_overall_predictions,
+  truth_col = test_overall_predictions$value,
+  estimate_col = test_overall_predictions$.pred,
+  num_predictors = num_predictors_t10
+)
+```
+
+```{r, echo = FALSE}
+cat("overall adj. r^2\n")
+print(adj_r_squared_overall)
+cat("t10 adj. r^2\n")
+print(adj_r_squared_t10)
+cat("t5 adj. r^2\n")
+print(adj_r_squared_t5)
+```
+Our results here are what we expected. The less features we use, the less accurate our models are when predicting for the `value`. Here's the breakdown for each model:
+
+* `overall` baseline model: The overall random forest model that include all the predictors has the lowest $RMSE$ of 1.72 and highest $adj. R^2$ of 0.594. This would mean that the baseline model has the best accuracy and explains for about 59.4% of the variance in the target variable `value`. This will be our baseline model. 
+* `top10` model: The model with top 10 important features had its $RMSE$ slightly increase to 1.85, indicating a slightly reduced accuracy. The model's $adj. R^2$ dropped to 0.510, which shows that less variance of `value` (51%) is explained by the model.
+* `top5` models: The model with top 5 important features dropped in acurracy even more than the `top10` model to a `RMSE` of 1.92. We also saw the $adj. R^2$ drop to 0.479, meaning the model explains about 48% of the variance of `value`. 
+
+As we decrease the amount of features, there is a decrease in accuracy and $adj. R^2$. This trade-off may be acceptable in some cases where model simplicity is needed where monitors only collect a select amount of variables. To explicitly answer the questions, we can reasonably predict the US annual average air pollution concentration with reasonable accuracy of 1.72 $RMSE$ and 0.594 $adj. R^2$ using our baseline model, explaining 59.4% of the variance in air pollution levels. The top-10 and top-5 models demonstrates a trade-off that a simpler model requires sacrificing some accuracy and explanatory power. For the most accurate and reliable prediction, the baseline model remains the best choice. However, if simpler approach is needed, both the top 10 and top 5 models offer practical approaches with reasonable accuracies, with the top 5 being slightly less accurate than the top 10 model (`RMSE`: 1.92 vs 1.85). 
+
+
+## Conclusion
+
+Through the random forest model, our team demonstrated we can predict the U.S. annual average air pollution concentration with an average error of 1.72, and find a more parsimonious model through feature selection with average errors of 1.85 and 1.92; these models can raise awareness and detect these undetectable threats in the U.S. As stated above, we conclude that the parsimonious model with top ten best features is comparable to our overall model, an approximate 0.1 error difference. Therefore, if an individual cannot gather all sixteen predictors to predict the air pollution concentration, our top ten model is more practical and flexible to utilize with less predictors to measure.
+
+## Limitations 
+
+Although our model may provide a general accuracy in predicting the concentration, there are still several factors to consider when using our model as a representation. It is important to consider that the data used for this study is a decade old and solely measured in the U.S.. Air pollution readings may fluctuate throughout the years and may serve our model as ineffective for future readings. Recent data can be analyzed and implemented into our model for more accurate predictions. Adding on, as the monitor measurements are solely in the U.S., this is not a universal model that we can utilize for other parts of the world. Stated previously, it is also important to consider that our data does not include specific details on the composition of particulate matter. There are several types of particulates that should be considered as they may have a range of effects on human health.
+We worked on this project through a scientific lens and did not focus on factors from other perspectives. Our analysis is derived from data focused on major biomes in the United States (e.g., states, cities, and counties) and excludes the smaller regions (microbiomes) within. History of racism throughout multiple parts of the United States have made some of these microbiomes - usually non-white neighborhoods - have significantly higher indexes of air pollution compared to white neighborhoods. For instance, in Los Angeles, infrastructure projects were intentionally built through Black and Latino neighborhoods often displacing families and subjecting the people within these communities to higher exposure to pollutants [^3]. As a result, grouping several regions within a city may greatly skew the calculation of the annual average and misrepresent the region’s general air quality. Lastly, we mainly focused on outdoor exposure to pollution and did not take into account individual exposure in private environments and other individual activity. It is said that air fresheners, gas stoves, and exposure to tobacco smoke can also negatively impact one’s health in the long term [^4]. 
+
+[^3]: https://afrolanews.org/2023/06/unequal-air-the-pollution-legacy-of-segregation-and-the-freeway-boom-in-los-angeles/
+[^4]: https://www.epa.gov/indoor-air-quality-iaq/inside-story-guide-indoor-air-quality#:~:text=Some%20sources%2C%20such%20as%20building,after%20some%20of%20these%20activities.
